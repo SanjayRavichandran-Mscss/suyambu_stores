@@ -3,6 +3,8 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
+const IMAGE_BASE = "http://localhost:5000";
+
 // Add new category
 exports.addCategory = async (req, res) => {
   try {
@@ -31,7 +33,6 @@ exports.updateCategory = async (req, res) => {
       return res.status(400).json({ error: 'Category name is required' });
     }
 
-    // Check if category exists
     const [existing] = await db.query('SELECT id FROM categories WHERE id = ?', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ error: 'Category not found' });
@@ -52,7 +53,6 @@ exports.deleteCategory = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Check if category exists
     const [existing] = await db.query('SELECT id FROM categories WHERE id = ?', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ error: 'Category not found' });
@@ -79,22 +79,37 @@ exports.viewCategories = async (req, res) => {
 };
 
 // Helper function to parse additional_images
-const parseAdditionalImages = (imagesData) => {
-  if (!imagesData) return [];
-  
+const parseAdditionalImages = (images) => {
   try {
-    // Try to parse as JSON first
-    const parsed = JSON.parse(imagesData);
-    if (Array.isArray(parsed)) {
-      return parsed;
+    if (!images) {
+      return [];
     }
+    if (Array.isArray(images)) {
+      return images.map((img) =>
+        img && img.startsWith("/") ? `${IMAGE_BASE}${img}` : img
+      );
+    }
+    if (typeof images === "string") {
+      try {
+        const parsed = JSON.parse(images);
+        if (Array.isArray(parsed)) {
+          return parsed.map((img) =>
+            img && img.startsWith("/") ? `${IMAGE_BASE}${img}` : img
+          );
+        }
+      } catch {
+        return images
+          .split(",")
+          .map((img) => img.trim())
+          .filter((img) => img)
+          .map((img) => (img.startsWith("/") ? `${IMAGE_BASE}${img}` : img));
+      }
+    }
+    return [];
   } catch (error) {
-    // If JSON parsing fails, handle as comma-separated string
-    if (typeof imagesData === 'string') {
-      return imagesData.split(',').map(img => img.trim()).filter(img => img);
-    }
+    console.error("Error parsing additional_images:", error, images);
+    return [];
   }
-  return [];
 };
 
 // Helper function to stringify additional_images
@@ -107,21 +122,18 @@ const stringifyAdditionalImages = (imagesArray) => {
 const productImageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadPath = path.join(__dirname, "../public/productImages");
-    // Ensure directory exists
     fs.mkdirSync(uploadPath, { recursive: true });
     cb(null, uploadPath);
   },
   filename: (req, file, cb) => {
-    // unique filename: timestamp-originalname
     cb(null, Date.now() + "-" + file.originalname.replace(/\s+/g, "-"));
   },
 });
 
 const productUpload = multer({
   storage: productImageStorage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB max file size
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    // Accept only image files
     const filetypes = /jpeg|jpg|png|gif/;
     const mimetype = filetypes.test(file.mimetype.toLowerCase());
     const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
@@ -149,12 +161,10 @@ exports.addProduct = [
         category_id,
       } = req.body;
 
-      // Simple validations
       if (!name || !price || !stock_quantity || !category_id) {
         return res.status(400).json({ error: "Missing required fields" });
       }
 
-      // Handle images
       let thumbnail_url = null;
       let additional_images = [];
 
@@ -169,7 +179,6 @@ exports.addProduct = [
         }
       }
 
-      // Insert into DB
       const sql = `
         INSERT INTO products 
         (name, description, price, stock_quantity, thumbnail_url, additional_images, category_id, admin_id, created_at, updated_at) 
@@ -184,7 +193,7 @@ exports.addProduct = [
         thumbnail_url,
         stringifyAdditionalImages(additional_images),
         category_id,
-        1, // static admin_id as per instruction
+        1,
       ]);
 
       return res.status(201).json({ message: "Product added successfully", id: result.insertId });
@@ -207,11 +216,8 @@ exports.updateProduct = [
         price,
         stock_quantity,
         category_id,
+        existing_additional_images,
       } = req.body;
-
-      if (!name || !price || !stock_quantity || !category_id) {
-        return res.status(400).json({ error: "Missing required fields" });
-      }
 
       // Check if product exists
       const [existing] = await db.query("SELECT * FROM products WHERE id = ?", [id]);
@@ -221,37 +227,92 @@ exports.updateProduct = [
 
       const product = existing[0];
 
-      let thumbnail_url = product.thumbnail_url;
-      let additional_images = parseAdditionalImages(product.additional_images);
+      // Prepare update fields
+      const updateFields = {};
+      if (name) updateFields.name = name;
+      if (description !== undefined) updateFields.description = description || null;
+      if (price) updateFields.price = price;
+      if (stock_quantity) updateFields.stock_quantity = stock_quantity;
+      if (category_id) updateFields.category_id = category_id;
 
-      if (req.files) {
-        if (req.files.thumbnail && req.files.thumbnail.length > 0) {
-          thumbnail_url = `/productImages/${req.files.thumbnail[0].filename}`;
+      let thumbnail_url = product.thumbnail_url;
+      let additional_images = [];
+
+      // Parse existing_additional_images from request body
+      let retainedImages = [];
+      if (existing_additional_images) {
+        try {
+          retainedImages = typeof existing_additional_images === 'string'
+            ? JSON.parse(existing_additional_images)
+            : existing_additional_images;
+        } catch (error) {
+          console.error("Error parsing existing_additional_images:", error);
+          retainedImages = [];
         }
-        if (req.files.additional_images && req.files.additional_images.length > 0) {
-          additional_images = req.files.additional_images.map(
-            (file) => `/productImages/${file.filename}`
+      }
+
+      // Get current images from DB
+      const currentImages = parseAdditionalImages(product.additional_images);
+
+      // Delete images that are no longer in retainedImages
+      const imagesToDelete = currentImages.filter(
+        img => !retainedImages.includes(img)
+      );
+      imagesToDelete.forEach((img) => {
+        const filePath = path.join(
+          __dirname,
+          '../public',
+          img.replace(IMAGE_BASE, '')
+        );
+        fs.unlink(filePath, (err) => {
+          if (err && err.code !== 'ENOENT') {
+            console.error('Error deleting additional image:', err);
+          }
+        });
+      });
+
+      // Handle new images
+      if (req.files && req.files.additional_images && req.files.additional_images.length > 0) {
+        additional_images = req.files.additional_images.map(
+          (file) => `/productImages/${file.filename}`
+        );
+      }
+
+      // Combine retained and new images
+      additional_images = [...retainedImages, ...additional_images];
+
+      if (req.files && req.files.thumbnail && req.files.thumbnail.length > 0) {
+        thumbnail_url = `/productImages/${req.files.thumbnail[0].filename}`;
+        if (product.thumbnail_url) {
+          const thumbnailPath = path.join(
+            __dirname,
+            '../public',
+            product.thumbnail_url.replace(IMAGE_BASE, '')
           );
+          fs.unlink(thumbnailPath, (err) => {
+            if (err && err.code !== 'ENOENT') {
+              console.error('Error deleting old thumbnail:', err);
+            }
+          });
         }
+      }
+
+      updateFields.thumbnail_url = thumbnail_url;
+      updateFields.additional_images = stringifyAdditionalImages(additional_images);
+
+      if (Object.keys(updateFields).length === 0) {
+        return res.status(400).json({ error: "No fields provided for update" });
       }
 
       const sql = `
         UPDATE products SET 
-          name = ?, description = ?, price = ?, stock_quantity = ?,
-          thumbnail_url = ?, additional_images = ?, category_id = ?, updated_at = NOW() 
+          ${Object.keys(updateFields).map((key) => `${key} = ?`).join(', ')},
+          updated_at = NOW()
         WHERE id = ?
       `;
+      const values = [...Object.values(updateFields), id];
 
-      await db.query(sql, [
-        name,
-        description || null,
-        price,
-        stock_quantity,
-        thumbnail_url,
-        stringifyAdditionalImages(additional_images),
-        category_id,
-        id,
-      ]);
+      await db.query(sql, values);
 
       return res.status(200).json({ message: "Product updated successfully" });
     } catch (error) {
@@ -266,25 +327,36 @@ exports.deleteProduct = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Check if product exists
     const [existing] = await db.query("SELECT id FROM products WHERE id = ?", [id]);
     if (existing.length === 0) {
       return res.status(404).json({ error: "Product not found" });
     }
 
-    // Optionally: delete images from filesystem here if needed
     const [product] = await db.query("SELECT thumbnail_url, additional_images FROM products WHERE id = ?", [id]);
     if (product.length > 0) {
       if (product[0].thumbnail_url) {
-        fs.unlink(path.join(__dirname, '../public', product[0].thumbnail_url), (err) => {
-          if (err) console.error('Error deleting thumbnail:', err);
+        const thumbnailPath = path.join(
+          __dirname,
+          '../public',
+          product[0].thumbnail_url.replace(IMAGE_BASE, '')
+        );
+        fs.unlink(thumbnailPath, (err) => {
+          if (err && err.code !== 'ENOENT') {
+            console.error('Error deleting thumbnail:', err);
+          }
         });
       }
-      
       const additionalImages = parseAdditionalImages(product[0].additional_images);
       additionalImages.forEach((img) => {
-        fs.unlink(path.join(__dirname, '../public', img), (err) => {
-          if (err) console.error('Error deleting additional image:', err);
+        const filePath = path.join(
+          __dirname,
+          '../public',
+          img.replace(IMAGE_BASE, '')
+        );
+        fs.unlink(filePath, (err) => {
+          if (err && err.code !== 'ENOENT') {
+            console.error('Error deleting additional image:', err);
+          }
         });
       });
     }
@@ -302,13 +374,15 @@ exports.deleteProduct = async (req, res) => {
 exports.viewProducts = async (req, res) => {
   try {
     const [rows] = await db.query(`SELECT * FROM products ORDER BY created_at DESC`);
-    
-    // Parse additional_images using our helper function
-    const parsedRows = rows.map(product => ({
+
+    const parsedRows = rows.map((product) => ({
       ...product,
-      additional_images: parseAdditionalImages(product.additional_images)
+      thumbnail_url: product.thumbnail_url?.startsWith("/")
+        ? `${IMAGE_BASE}${product.thumbnail_url}`
+        : product.thumbnail_url || "",
+      additional_images: parseAdditionalImages(product.additional_images),
     }));
-    
+
     return res.status(200).json(parsedRows);
   } catch (error) {
     console.error("Error fetching products:", error);

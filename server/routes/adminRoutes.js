@@ -10,7 +10,7 @@ router.get('/categories', adminController.viewCategories);
 
 // Product routes
 router.post("/products", adminController.addProduct);
-router.put("/products/:id", adminController.updateProduct);
+router.patch("/products/:id", adminController.updateProduct);
 router.delete("/products/:id", adminController.deleteProduct);
 router.get("/products", adminController.viewProducts);
 

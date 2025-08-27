@@ -19,11 +19,12 @@ const ManageProducts = () => {
     price: "",
     stock_quantity: "",
     thumbnail: null,
+    thumbnail_url: "",
     additional_images: [],
+    existing_additional_images: [],
   });
   const [categorySearch, setCategorySearch] = useState("");
 
-  // Load all categories and products
   useEffect(() => {
     loadCategories();
     loadProducts();
@@ -83,7 +84,9 @@ const ManageProducts = () => {
       price: "",
       stock_quantity: "",
       thumbnail: null,
+      thumbnail_url: "",
       additional_images: [],
+      existing_additional_images: [],
     });
     setCategorySearch("");
     setModalOpen(true);
@@ -98,7 +101,9 @@ const ManageProducts = () => {
       price: product.price.toString(),
       stock_quantity: product.stock_quantity.toString(),
       thumbnail: null,
+      thumbnail_url: product.thumbnail_url,
       additional_images: [],
+      existing_additional_images: product.additional_images || [],
     });
     setCategorySearch("");
     setModalOpen(true);
@@ -114,7 +119,9 @@ const ManageProducts = () => {
       price: "",
       stock_quantity: "",
       thumbnail: null,
+      thumbnail_url: "",
       additional_images: [],
+      existing_additional_images: [],
     });
     setCategorySearch("");
   };
@@ -123,13 +130,28 @@ const ManageProducts = () => {
     const { name, value, files, type } = e.target;
     if (type === "file") {
       if (name === "thumbnail") {
-        setFormData(prev => ({ ...prev, thumbnail: files[0] }));
+        setFormData(prev => ({
+          ...prev,
+          thumbnail: files[0],
+          thumbnail_url: files[0] ? URL.createObjectURL(files[0]) : prev.thumbnail_url
+        }));
       } else if (name === "additional_images") {
-        setFormData(prev => ({ ...prev, additional_images: Array.from(files).slice(0, 5) }));
+        const newImages = Array.from(files).slice(0, 5 - formData.existing_additional_images.length);
+        setFormData(prev => ({
+          ...prev,
+          additional_images: newImages,
+        }));
       }
     } else {
       setFormData(prev => ({ ...prev, [name]: value }));
     }
+  };
+
+  const removeExistingImage = (index) => {
+    setFormData(prev => ({
+      ...prev,
+      existing_additional_images: prev.existing_additional_images.filter((_, i) => i !== index),
+    }));
   };
 
   const validateForm = () => {
@@ -163,19 +185,22 @@ const ManageProducts = () => {
       let method = "POST";
       if (formData.id) {
         url += `/${formData.id}`;
-        method = "PUT";
+        method = "PATCH";
       }
       const payload = new FormData();
-      payload.append("category_id", formData.category_id);
-      payload.append("name", formData.name);
-      payload.append("description", formData.description);
-      payload.append("price", formData.price);
-      payload.append("stock_quantity", formData.stock_quantity);
+      if (formData.category_id) payload.append("category_id", formData.category_id);
+      if (formData.name) payload.append("name", formData.name);
+      if (formData.description) payload.append("description", formData.description);
+      if (formData.price) payload.append("price", formData.price);
+      if (formData.stock_quantity) payload.append("stock_quantity", formData.stock_quantity);
       if (formData.thumbnail) payload.append("thumbnail", formData.thumbnail);
       formData.additional_images.forEach((file, idx) => {
         if (idx >= 5) return;
         payload.append("additional_images", file);
       });
+      if (formData.existing_additional_images.length > 0) {
+        payload.append("existing_additional_images", JSON.stringify(formData.existing_additional_images));
+      }
       const res = await fetch(url, { method, body: payload });
       if (!res.ok) {
         const errorData = await res.json();
@@ -272,8 +297,6 @@ const ManageProducts = () => {
                 className="bg-white rounded-xl shadow-lg p-6 flex flex-col hover:shadow-xl transition"
               >
                 <h3 className="text-lg font-semibold text-gray-900 mb-2 truncate">{prod.name}</h3>
-                
-                {/* Main product image */}
                 <div className="relative mb-4">
                   <img
                     src={displayImage}
@@ -283,9 +306,7 @@ const ManageProducts = () => {
                     onError={(e) => { e.target.src = FALLBACK_IMAGE; }}
                   />
                 </div>
-                
-                {/* Thumbnail and additional images */}
-                <div className="flex items-start gap-2 mb-4 overflow-x-auto pb-2">
+                <div className="flex flex-wrap gap-2 mb-4 overflow-x-auto pb-2">
                   {allImages.map((img, idx) => (
                     <img
                       key={idx}
@@ -299,7 +320,6 @@ const ManageProducts = () => {
                     />
                   ))}
                 </div>
-                
                 <div className="mb-1 text-gray-700">
                   <span className="font-medium">Category:</span> {category?.name || "N/A"}
                 </div>
@@ -365,152 +385,235 @@ const ManageProducts = () => {
       )}
       {modalOpen && (
         <div
-          className="fixed inset-0 backdrop-blur-sm bg-black bg-opacity-30 flex justify-center items-center z-50 p-4"
+          className="fixed inset-0 backdrop-blur-sm bg-opacity-30 flex justify-center items-center z-50 p-4"
           onClick={closeModal}
         >
           <div
-            className="bg-white rounded-lg shadow-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto"
+            className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-full max-h-[98vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="text-xl font-semibold mb-6 text-gray-900">
-              {formData.id ? "Edit Product" : "Add Product"}
-            </h2>
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-bold text-gray-800">
+                {formData.id ? "Edit Product" : "Add Product"}
+              </h2>
+              <button
+                onClick={closeModal}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+                aria-label="Close"
+              >
+                &times;
+              </button>
+            </div>
             <form onSubmit={handleSubmit} encType="multipart/form-data">
-              <div className="mb-4 relative">
-                <label htmlFor="category_id" className="block mb-1 font-medium text-gray-700">
-                  Category <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={categories.find(cat => cat.id.toString() === formData.category_id)?.name || categorySearch}
-                  onChange={(e) => {
-                    setCategorySearch(e.target.value);
-                    setFormData((prev) => ({ ...prev, category_id: "" }));
-                  }}
-                  placeholder="Search or select category"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#69D84F]"
-                />
-                {categorySearch && (
-                  <ul className="absolute z-50 bg-white border border-gray-300 rounded-md w-full mt-1 max-h-40 overflow-auto shadow-lg">
-                    {filteredCategories.length === 0 ? (
-                      <li className="p-2 text-gray-500">No categories found</li>
-                    ) : (
-                      filteredCategories.map((cat) => (
-                        <li
-                          key={cat.id}
-                          className="cursor-pointer p-2 hover:bg-green-100"
-                          onClick={() => {
-                            setFormData((prev) => ({ ...prev, category_id: cat.id.toString() }));
-                            setCategorySearch("");
-                          }}
-                        >
-                          {cat.name}
-                        </li>
-                      ))
+              <div className="space-y-6">
+                <div>
+                  <label htmlFor="category_id" className="block text-sm font-medium text-gray-700 mb-1">
+                    Category <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={categories.find(cat => cat.id.toString() === formData.category_id)?.name || categorySearch}
+                      onChange={(e) => {
+                        setCategorySearch(e.target.value);
+                        setFormData((prev) => ({ ...prev, category_id: "" }));
+                      }}
+                      placeholder="Search or select category"
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#69D84F] focus:border-transparent"
+                    />
+                    {categorySearch && (
+                      <ul className="absolute z-50 bg-white border border-gray-300 rounded-lg w-full mt-1 max-h-40 overflow-auto shadow-lg">
+                        {filteredCategories.length === 0 ? (
+                          <li className="p-2 text-gray-500">No categories found</li>
+                        ) : (
+                          filteredCategories.map((cat) => (
+                            <li
+                              key={cat.id}
+                              className="cursor-pointer p-2 hover:bg-green-50 text-gray-800"
+                              onClick={() => {
+                                setFormData((prev) => ({ ...prev, category_id: cat.id.toString() }));
+                                setCategorySearch("");
+                              }}
+                            >
+                              {cat.name}
+                            </li>
+                          ))
+                        )}
+                      </ul>
                     )}
-                  </ul>
-                )}
-              </div>
-              <div className="mb-4">
-                <label htmlFor="name" className="block mb-1 font-medium text-gray-700">
-                  Name <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  id="name"
-                  name="name"
-                  value={formData.name}
-                  onChange={handleChange}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#69D84F]"
-                />
-              </div>
-              <div className="mb-4">
-                <label htmlFor="description" className="block mb-1 font-medium text-gray-700">
-                  Description
-                </label>
-                <textarea
-                  id="description"
-                  name="description"
-                  value={formData.description}
-                  onChange={handleChange}
-                  rows={3}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#69D84F]"
-                />
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  </div>
+                </div>
                 <div>
-                  <label htmlFor="price" className="block mb-1 font-medium text-gray-700">
-                    Price (₹) <span className="text-red-500">*</span>
+                  <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
+                    Name <span className="text-red-500">*</span>
                   </label>
                   <input
-                    type="number"
-                    id="price"
-                    name="price"
-                    value={formData.price}
+                    type="text"
+                    id="name"
+                    name="name"
+                    value={formData.name}
                     onChange={handleChange}
-                    min="0"
-                    step="0.01"
                     required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#69D84F]"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#69D84F] focus:border-transparent"
                   />
                 </div>
                 <div>
-                  <label htmlFor="stock_quantity" className="block mb-1 font-medium text-gray-700">
-                    Stock Quantity <span className="text-red-500">*</span>
+                  <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">
+                    Description
                   </label>
-                  <input
-                    type="number"
-                    id="stock_quantity"
-                    name="stock_quantity"
-                    value={formData.stock_quantity}
+                  <textarea
+                    id="description"
+                    name="description"
+                    value={formData.description}
                     onChange={handleChange}
-                    min="0"
-                    required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#69D84F]"
+                    rows={4}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#69D84F] focus:border-transparent"
                   />
                 </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label htmlFor="price" className="block text-sm font-medium text-gray-700 mb-1">
+                      Price (₹) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      id="price"
+                      name="price"
+                      value={formData.price}
+                      onChange={handleChange}
+                      min="0"
+                      step="0.01"
+                      required
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#69D84F] focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="stock_quantity" className="block text-sm font-medium text-gray-700 mb-1">
+                      Stock Quantity <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      id="stock_quantity"
+                      name="stock_quantity"
+                      value={formData.stock_quantity}
+                      onChange={handleChange}
+                      min="0"
+                      required
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#69D84F] focus:border-transparent"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Thumbnail Image {formData.id ? "(Leave blank to keep current)" : <span className="text-red-500">*</span>}
+                  </label>
+                  {formData.thumbnail_url && (
+                    <div className="relative mb-4">
+                      <img
+                        src={formData.thumbnail_url}
+                        alt="Thumbnail Preview"
+                        className="w-32 h-32 object-cover rounded-lg border border-gray-300"
+                        onError={(e) => { e.target.src = FALLBACK_IMAGE; }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setFormData(prev => ({ ...prev, thumbnail: null, thumbnail_url: "" }))}
+                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-600"
+                        aria-label="Remove Thumbnail"
+                      >
+                        &times;
+                      </button>
+                    </div>
+                  )}
+                  <input
+                    type="file"
+                    id="thumbnail"
+                    name="thumbnail"
+                    accept="image/*"
+                    onChange={handleChange}
+                    required={!formData.id || !formData.thumbnail_url}
+                    className="w-full border border-gray-300 rounded-lg p-2 bg-gray-50"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Additional Images (Max 5)
+                  </label>
+                  {formData.existing_additional_images.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {formData.existing_additional_images.map((img, idx) => (
+                        <div key={idx} className="relative">
+                          <img
+                            src={img}
+                            alt={`Additional Image ${idx + 1}`}
+                            className="w-20 h-20 object-cover rounded-lg border border-gray-300"
+                            onError={(e) => { e.target.src = FALLBACK_IMAGE; }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeExistingImage(idx)}
+                            className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-600"
+                            aria-label="Remove Image"
+                          >
+                            &times;
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <input
+                    type="file"
+                    id="additional_images"
+                    name="additional_images"
+                    accept="image/*"
+                    onChange={handleChange}
+                    multiple
+                    disabled={formData.existing_additional_images.length >= 5}
+                    className="w-full border border-gray-300 rounded-lg p-2 bg-gray-50"
+                  />
+                  {formData.additional_images.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {formData.additional_images.map((file, idx) => (
+                        <div key={idx} className="relative">
+                          <img
+                            src={URL.createObjectURL(file)}
+                            alt={`New Additional Image ${idx + 1}`}
+                            className="w-20 h-20 object-cover rounded-lg border border-gray-300"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFormData(prev => ({
+                                ...prev,
+                                additional_images: prev.additional_images.filter((_, i) => i !== idx),
+                              }));
+                            }}
+                            className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-600"
+                            aria-label="Remove Image"
+                          >
+                            &times;
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-sm text-gray-500 mt-1">
+                    {5 - formData.existing_additional_images.length} image(s) can be added.
+                  </p>
+                </div>
               </div>
-              <div className="mt-4">
-                <label htmlFor="thumbnail" className="block mb-1 font-medium text-gray-700">
-                  Thumbnail Image {formData.id ? "(Leave blank to keep current)" : <span className="text-red-500">*</span>}
-                </label>
-                <input
-                  type="file"
-                  id="thumbnail"
-                  name="thumbnail"
-                  accept="image/*"
-                  onChange={handleChange}
-                  required={!formData.id}
-                  className="w-full border border-gray-300 rounded-md p-1"
-                />
-              </div>
-              <div className="mt-4">
-                <label htmlFor="additional_images" className="block mb-1 font-medium text-gray-700">
-                  Additional Images (Max 5)
-                </label>
-                <input
-                  type="file"
-                  id="additional_images"
-                  name="additional_images"
-                  accept="image/*"
-                  onChange={handleChange}
-                  multiple
-                  className="w-full border border-gray-300 rounded-md p-1"
-                />
-              </div>
-              <div className="flex justify-end space-x-3 mt-6">
+              <div className="flex justify-end space-x-4 mt-8">
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-100"
+                  className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100 transition"
                   disabled={loading}
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-[#69D84F] text-white rounded-md hover:bg-green-600"
+                  className="px-6 py-2 bg-[#69D84F] text-white rounded-lg hover:bg-green-600 transition"
                   disabled={loading}
                 >
                   {loading ? "Saving..." : "Save"}
